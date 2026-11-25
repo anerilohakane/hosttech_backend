@@ -5,14 +5,18 @@ import { hashPassword, comparePassword, signToken, TokenPayload } from '@/lib/au
 
 export async function authenticateUser({ email, password }: { email: string; password: string }) {
   await connectDB();
-  const user = await User.findOne({ email: email.toLowerCase().trim() });
-  if (!user || !user.isActive) {
-    throw new Error('Invalid email or inactive account.');
+  const cleanEmail = email.toLowerCase().trim();
+  const user = await User.findOne({ email: cleanEmail });
+  if (!user) {
+    throw new Error('Invalid email or password.');
+  }
+  if (!user.isActive) {
+    throw new Error('Account is inactive.');
   }
 
   const isValid = await comparePassword(password, user.password);
   if (!isValid) {
-    throw new Error('Invalid password.');
+    throw new Error('Invalid email or password.');
   }
 
   let residentId: string | undefined;

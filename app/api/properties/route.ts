@@ -25,7 +25,8 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const property = await createProperty(body);
+    const result = await createProperty(body);
+    const property = result.property;
 
     await logAudit({
       action: 'PG Property Created',
@@ -33,10 +34,10 @@ export async function POST(req: NextRequest) {
       recordId: property._id.toString(),
       adminId: auth.user.userId,
       adminName: auth.user.name,
-      newValues: { name: property.name, city: property.city },
+      newValues: { name: property.name, city: property.city, adminUser: result.adminUser },
     });
 
-    return NextResponse.json({ success: true, property }, { status: 201 });
+    return NextResponse.json({ success: true, property, adminUser: result.adminUser }, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 400 });
   }
