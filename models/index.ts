@@ -1,4 +1,7 @@
 export * from './User';
+export * from './Organization';
+export * from './SubscriptionPlan';
+export * from './SupportTicket';
 export * from './PGProperty';
 export * from './Room';
 export * from './Bed';
@@ -13,4 +16,3 @@ export * from './Complaint';
 export * from './Notification';
 export * from './AuditLog';
 export * from './AppSettings';
-

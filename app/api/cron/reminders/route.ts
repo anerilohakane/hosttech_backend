@@ -3,8 +3,11 @@ import { connectDB } from '@/lib/db';
 import { requireAuth } from '@/lib/auth';
 import { RentRecord } from '@/models/RentRecord';
 import { ResidentProfile } from '@/models/ResidentProfile';
+import { PGProperty } from '@/models/PGProperty';
+import { AppSettings } from '@/models/AppSettings';
 import { createInAppNotification } from '@/lib/notifications';
 import { generateMonthlyRentForActiveResidents } from '@/services/rentService';
+import { sendRentReminderEmail } from '@/lib/emailService';
 
 export async function POST(req: NextRequest) {
   try {
@@ -34,10 +37,23 @@ export async function POST(req: NextRequest) {
     const unpaidRentRecords = await RentRecord.find({
       status: { $in: ['Unpaid', 'Partially Paid', 'Overdue'] },
       outstandingAmount: { $gt: 0 },
-    }).populate('residentId');
+    }).populate('residentId').populate('propertyId');
 
-    let remindersSent = 0;
+    const appSettings = await AppSettings.findOne();
+    const defaultUpi = appSettings?.upiId || 'pgpay@upi';
+
+    let inAppRemindersSent = 0;
+    let emailsSent = 0;
     const todayMs = now.getTime();
+
+    // Check optional body flag `forceSendAll` if an admin triggers month-end reminders manually
+    let forceSendAll = false;
+    try {
+      const body = await req.json().catch(() => ({}));
+      if (body?.forceSendAll) forceSendAll = true;
+    } catch {
+      // no body
+    }
 
     for (const record of unpaidRentRecords) {
       const resident: any = record.residentId;
@@ -46,8 +62,10 @@ export async function POST(req: NextRequest) {
       const dueMs = new Date(record.dueDate).getTime();
       const diffDays = Math.round((dueMs - todayMs) / (1000 * 60 * 60 * 24));
 
-      // Schedules: 5 days before, 1 day before, due date (0), 3 days overdue (-3), every 7 days overdue
+      // Eligible: forceSendAll (e.g. month-end manual trigger) OR scheduled window
+      // [-5, -1, 0, 3, 7] days or end of month / overdue
       const isEligibleReminder =
+        forceSendAll ||
         diffDays === 5 ||
         diffDays === 1 ||
         diffDays === 0 ||
@@ -62,6 +80,7 @@ export async function POST(req: NextRequest) {
           await record.save();
         }
 
+        // Send in-app notification
         await createInAppNotification({
           recipientId: resident.userId,
           title,
@@ -69,7 +88,39 @@ export async function POST(req: NextRequest) {
           type: 'Rent',
           referenceId: record._id.toString(),
         });
-        remindersSent++;
+        inAppRemindersSent++;
+
+        // Send high-contrast month-end rent reminder email
+        if (resident.email) {
+          const property: any = record.propertyId;
+          const pgName = property?.name || 'HostTech PG';
+
+          // Fetch room number if populated or populate
+          let roomNumber = 'Assigned';
+          if (resident.roomId) {
+            const populatedResident = await ResidentProfile.findById(resident._id).populate('roomId');
+            roomNumber = (populatedResident?.roomId as any)?.roomNumber || 'Assigned';
+          }
+
+          sendRentReminderEmail({
+            toEmail: resident.email,
+            tenantName: resident.fullName,
+            pgName,
+            roomNumber,
+            rentMonth: record.rentMonth,
+            baseRent: record.rentAmount || resident.monthlyRent,
+            electricityAmount: record.electricityCharges || 0,
+            maintenanceAmount: record.maintenanceCharges || 0,
+            totalPayable: record.totalPayable,
+            amountPaid: record.amountPaid || 0,
+            outstandingBalance: record.outstandingAmount,
+            dueDate: record.dueDate,
+            upiId: defaultUpi,
+          }).catch(err => {
+            console.error(`[Rent Reminder Email Error] for ${resident.email}:`, err);
+          });
+          emailsSent++;
+        }
       }
     }
 
@@ -78,10 +129,10 @@ export async function POST(req: NextRequest) {
       message: 'Scheduled cron execution completed',
       billingMonth: currentBillingMonth,
       rentGeneration: rentGenResult,
-      remindersSent,
+      inAppRemindersSent,
+      emailsSent,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
-

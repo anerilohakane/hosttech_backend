@@ -3,9 +3,11 @@ import { Room } from '@/models/Room';
 import { Bed } from '@/models/Bed';
 import { ResidentProfile } from '@/models/ResidentProfile';
 
-export async function getRooms(propertyId?: string) {
+export async function getRooms(propertyId?: string, organizationId?: string) {
   await connectDB();
-  const query = propertyId ? { propertyId } : {};
+  const query: any = {};
+  if (propertyId) query.propertyId = propertyId;
+  if (organizationId) query.organizationId = organizationId;
   const rooms = await Room.find(query).populate('propertyId', 'name').sort({ floor: 1, roomNumber: 1 });
 
   // Get active residents occupying each room

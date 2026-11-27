@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 
 export interface IResidentProfile extends Document {
+  organizationId?: mongoose.Types.ObjectId; // Organization/PG tenant scope
   userId: mongoose.Types.ObjectId;
   fullName: string;
   email: string;
@@ -17,9 +18,9 @@ export interface IResidentProfile extends Document {
   roomId: mongoose.Types.ObjectId;
   bedId?: mongoose.Types.ObjectId;
   occupancyType: 'Full Room' | 'Shared';
-  monthlyRent: number; // Custom rent agreed with admin
+  monthlyRent: number;
   rentDueDay: number;
-  securityDeposit: number; // Custom deposit agreed with admin
+  securityDeposit: number;
   securityDepositPaid: number;
   advancePayment: number;
   agreementStartDate?: Date;
@@ -34,6 +35,7 @@ export interface IResidentProfile extends Document {
 
 const ResidentProfileSchema = new Schema<IResidentProfile>(
   {
+    organizationId: { type: Schema.Types.ObjectId, ref: 'Organization', index: true },
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
     fullName: { type: String, required: true, trim: true },
     email: { type: String, required: true, lowercase: true, trim: true },
@@ -52,18 +54,22 @@ const ResidentProfileSchema = new Schema<IResidentProfile>(
     occupancyType: { type: String, enum: ['Full Room', 'Shared'], default: 'Shared' },
     monthlyRent: { type: Number, required: true },
     rentDueDay: { type: Number, default: 5 },
-    securityDeposit: { type: Number, required: true, default: 0 },
+    securityDeposit: { type: Number, default: 0 },
     securityDepositPaid: { type: Number, default: 0 },
     advancePayment: { type: Number, default: 0 },
     agreementStartDate: { type: Date },
     agreementEndDate: { type: Date },
     noticePeriodDays: { type: Number, default: 30 },
-    status: { type: String, enum: ['Active', 'Notice Period', 'Vacated'], default: 'Active', index: true },
+    status: { type: String, enum: ['Active', 'Notice Period', 'Vacated'], default: 'Active' },
     noticeDate: { type: Date },
     vacatingDate: { type: Date },
   },
   { timestamps: true }
 );
+
+ResidentProfileSchema.index({ organizationId: 1 });
+ResidentProfileSchema.index({ propertyId: 1 });
+ResidentProfileSchema.index({ roomId: 1 });
 
 export const ResidentProfile =
   mongoose.models.ResidentProfile || mongoose.model<IResidentProfile>('ResidentProfile', ResidentProfileSchema);

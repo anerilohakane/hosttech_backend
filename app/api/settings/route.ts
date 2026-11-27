@@ -12,9 +12,12 @@ export async function GET(req: NextRequest) {
 
   try {
     await connectDB();
-    let settings = await AppSettings.findOne();
+    const filter = auth.user.organizationId ? { organizationId: auth.user.organizationId } : {};
+    let settings = await AppSettings.findOne(filter);
     if (!settings) {
-      settings = await AppSettings.create({});
+      settings = await AppSettings.create({
+        ...filter,
+      });
     }
     return NextResponse.json({ success: true, settings });
   } catch (err: any) {
@@ -31,9 +34,10 @@ export async function PUT(req: NextRequest) {
   try {
     await connectDB();
     const body = await req.json();
-    let settings = await AppSettings.findOne();
+    const filter = auth.user.organizationId ? { organizationId: auth.user.organizationId } : {};
+    let settings = await AppSettings.findOne(filter);
     if (!settings) {
-      settings = await AppSettings.create(body);
+      settings = await AppSettings.create({ ...body, ...filter });
     } else {
       Object.assign(settings, body);
       await settings.save();

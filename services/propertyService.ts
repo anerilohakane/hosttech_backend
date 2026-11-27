@@ -6,11 +6,17 @@ import { ResidentProfile } from '@/models/ResidentProfile';
 import { User } from '@/models/User';
 import { hashPassword } from '@/lib/auth';
 
-export async function getAllProperties(filters: { isActive?: boolean } = {}) {
+export async function getAllProperties(filters: { isActive?: boolean; organizationId?: string; _id?: string } = {}) {
   await connectDB();
   const query: any = {};
   if (filters.isActive !== undefined) {
     query.isActive = filters.isActive;
+  }
+  if (filters.organizationId) {
+    query.organizationId = filters.organizationId;
+  }
+  if (filters._id) {
+    query._id = filters._id;
   }
   return PGProperty.find(query).sort({ createdAt: -1 });
 }

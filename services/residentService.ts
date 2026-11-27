@@ -10,20 +10,33 @@ import { RentRecord } from '@/models/RentRecord';
 import { hashPassword } from '@/lib/auth';
 import { createInAppNotification } from '@/lib/notifications';
 import { logAudit } from '@/lib/audit';
-import { sendResidentWelcomeEmail } from '@/lib/mailer';
+import { sendTenantWelcomeEmail } from '@/lib/emailService';
 import { uploadDocument } from '@/services/documentService';
 
-export async function getResidents(filters: { propertyId?: string; status?: string; search?: string } = {}) {
+export async function getResidents(filters: { propertyId?: string; status?: string; search?: string; organizationId?: string } = {}) {
   await connectDB();
   const query: any = {};
+  if (filters.organizationId) {
+    query.$or = [
+      { organizationId: filters.organizationId },
+      { organizationId: { $exists: false } },
+      { organizationId: null },
+    ];
+  }
   if (filters.propertyId) query.propertyId = filters.propertyId;
   if (filters.status) query.status = filters.status;
   if (filters.search) {
-    query.$or = [
+    const searchCondition = [
       { fullName: { $regex: filters.search, $options: 'i' } },
       { phone: { $regex: filters.search, $options: 'i' } },
       { email: { $regex: filters.search, $options: 'i' } },
     ];
+    if (query.$or) {
+      query.$and = [{ $or: query.$or }, { $or: searchCondition }];
+      delete query.$or;
+    } else {
+      query.$or = searchCondition;
+    }
   }
 
   return ResidentProfile.find(query)
@@ -91,6 +104,7 @@ export async function registerResident(data: {
   panCardFile?: { name: string; type: string; size: number; base64: string };
   adminId: string;
   adminName: string;
+  organizationId?: string;
 }) {
   await connectDB();
 
@@ -166,11 +180,13 @@ export async function registerResident(data: {
     password: hashedPassword,
     role: 'resident',
     propertyId: data.propertyId,
+    organizationId: data.organizationId,
     isActive: true,
   });
 
   // Create Resident Profile
   const profile = await ResidentProfile.create({
+    organizationId: data.organizationId,
     userId: newUser._id,
     fullName: data.fullName,
     email: data.email.toLowerCase().trim(),
@@ -365,18 +381,18 @@ export async function registerResident(data: {
   }
 
   // Send Login Credentials via Email in background so API responds immediately without lag
-  let emailSentPromise = sendResidentWelcomeEmail({
-    to: profile.email,
-    residentName: profile.fullName,
+  sendTenantWelcomeEmail({
+    toEmail: profile.email,
+    tenantName: profile.fullName,
     pgName: propertyName,
     roomNumber: room.roomNumber,
-    email: profile.email,
+    username: profile.email,
     password: defaultPassword,
     monthlyRent: profile.monthlyRent,
     securityDeposit: profile.securityDeposit,
+    securityDepositPaid: profile.securityDepositPaid || 0,
   }).catch((e) => {
     console.error('[ResidentService] Welcome email failed:', e.message);
-    return { success: false, error: e.message };
   });
 
   // Audit Log
@@ -459,6 +475,7 @@ export async function checkoutResident({
   notes?: string;
   adminId: string;
   adminName: string;
+  organizationId?: string;
 }) {
   await connectDB();
   const resident = await ResidentProfile.findById(residentId);

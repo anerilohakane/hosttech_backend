@@ -7,6 +7,11 @@ export interface IRentRecord extends Document {
   bedId?: mongoose.Types.ObjectId;
   rentMonth: string; // format YYYY-MM e.g. "2026-11"
   rentAmount: number;
+  electricityAmount?: number;
+  electricityUnits?: number;
+  electricityRate?: number;
+  electricityBillUrl?: string; // Room light bill copy attachment
+  electricityRoomTotal?: number; // Total room bill before split
   dueDate: Date;
   previousOutstanding: number;
   totalPayable: number;
@@ -28,6 +33,11 @@ const RentRecordSchema = new Schema<IRentRecord>(
     bedId: { type: Schema.Types.ObjectId, ref: 'Bed' },
     rentMonth: { type: String, required: true, index: true },
     rentAmount: { type: Number, required: true },
+    electricityAmount: { type: Number, default: 0 },
+    electricityUnits: { type: Number, default: 0 },
+    electricityRate: { type: Number, default: 10 },
+    electricityBillUrl: { type: String, default: '' },
+    electricityRoomTotal: { type: Number, default: 0 },
     dueDate: { type: Date, required: true },
     previousOutstanding: { type: Number, default: 0 },
     totalPayable: { type: Number, required: true },

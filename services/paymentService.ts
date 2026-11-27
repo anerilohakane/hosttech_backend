@@ -3,9 +3,38 @@ import { PaymentSubmission } from '@/models/PaymentSubmission';
 import { RentRecord } from '@/models/RentRecord';
 import { PaymentReceipt } from '@/models/PaymentReceipt';
 import { ResidentProfile } from '@/models/ResidentProfile';
+import { PGProperty } from '@/models/PGProperty';
+import { User } from '@/models/User';
 import { AppSettings } from '@/models/AppSettings';
 import { createInAppNotification } from '@/lib/notifications';
 import { logAudit } from '@/lib/audit';
+import { generateReceiptPDF } from '@/lib/pdf';
+import {
+  sendTenantPaymentConfirmationEmail,
+  sendAdminPaymentNotificationEmail,
+} from '@/lib/emailService';
+
+// Helper to find the Admin's email for a given property or organization
+async function getAdminEmailForProperty(propertyId?: any, organizationId?: any): Promise<{ email: string; name: string } | null> {
+  try {
+    let admin = null;
+    if (propertyId) {
+      admin = await User.findOne({ propertyId, role: 'admin', isActive: true });
+    }
+    if (!admin && organizationId) {
+      admin = await User.findOne({ organizationId, role: 'admin', isActive: true });
+    }
+    if (!admin) {
+      admin = await User.findOne({ role: 'admin', isActive: true });
+    }
+    if (admin && admin.email) {
+      return { email: admin.email, name: admin.name || 'Property Admin' };
+    }
+  } catch (err) {
+    console.error('[Admin Email Lookup Error]:', err);
+  }
+  return null;
+}
 
 export async function submitPayment({
   residentId,
@@ -55,6 +84,31 @@ export async function submitPayment({
   // Update rent record status to Verification Pending
   rentRecord.status = 'Verification Pending';
   await rentRecord.save();
+
+  // Send immediate payment alert email to Admin
+  const resident = await ResidentProfile.findById(residentId).populate('roomId');
+  const property = await PGProperty.findById(rentRecord.propertyId);
+  const adminContact = await getAdminEmailForProperty(rentRecord.propertyId, resident?.organizationId);
+
+  if (adminContact && resident) {
+    const roomNumber = (resident.roomId as any)?.roomNumber || 'Assigned';
+    sendAdminPaymentNotificationEmail({
+      toEmail: adminContact.email,
+      adminName: adminContact.name,
+      tenantName: resident.fullName,
+      tenantPhone: resident.phone,
+      pgName: property?.name || 'HostTech PG',
+      roomNumber,
+      rentMonth: rentRecord.rentMonth,
+      amountPaid: amount,
+      paymentMethod,
+      transactionId: transactionId || '',
+      remainingBalance: Math.max(0, rentRecord.outstandingAmount - amount),
+      isApprovalAction: false,
+    }).catch(err => {
+      console.error('[SubmitPayment Admin Email Alert Error]:', err);
+    });
+  }
 
   return submission;
 }
@@ -114,8 +168,8 @@ export async function approvePayment({
     receivedBy: adminId,
   });
 
-  // Notify resident
-  const resident = await ResidentProfile.findById(submission.residentId);
+  // Notify resident via In-App
+  const resident = await ResidentProfile.findById(submission.residentId).populate('roomId').populate('bedId');
   if (resident) {
     await createInAppNotification({
       recipientId: resident.userId,
@@ -139,6 +193,62 @@ export async function approvePayment({
       rentRecordStatus: rentRecord.status,
     },
   });
+
+  // Generate PDF Receipt Buffer & send emails to BOTH Tenant and Admin
+  const property = await PGProperty.findById(rentRecord.propertyId);
+  const baseUrl = process.env.BASE_URL || 'https://pgappbackend.vercel.app';
+  const receiptDownloadUrl = `${baseUrl}/api/receipts/${receipt._id}/pdf`;
+
+  let pdfBuffer: Buffer | undefined;
+  try {
+    pdfBuffer = generateReceiptPDF({ receipt, property, resident });
+  } catch (pdfErr) {
+    console.error('[Receipt PDF Generation Error]:', pdfErr);
+  }
+
+  // 1. Send receipt confirmation email to Tenant with PDF download link & attachment
+  if (resident && resident.email) {
+    const roomNumber = (resident.roomId as any)?.roomNumber || 'Assigned';
+    sendTenantPaymentConfirmationEmail({
+      toEmail: resident.email,
+      tenantName: resident.fullName,
+      pgName: property?.name || 'HostTech PG',
+      roomNumber,
+      rentMonth: rentRecord.rentMonth,
+      amountPaid: submission.amount,
+      paymentMethod: submission.paymentMethod,
+      transactionId: submission.transactionId,
+      receiptNumber,
+      remainingBalance: rentRecord.outstandingAmount,
+      receiptDownloadUrl,
+      pdfBuffer,
+    }).catch(err => {
+      console.error('[ApprovePayment Tenant Email Error]:', err);
+    });
+  }
+
+  // 2. Send confirmation notice to PG Admin
+  const adminContact = await getAdminEmailForProperty(rentRecord.propertyId, resident?.organizationId);
+  if (adminContact && resident) {
+    const roomNumber = (resident.roomId as any)?.roomNumber || 'Assigned';
+    sendAdminPaymentNotificationEmail({
+      toEmail: adminContact.email,
+      adminName: adminContact.name,
+      tenantName: resident.fullName,
+      tenantPhone: resident.phone,
+      pgName: property?.name || 'HostTech PG',
+      roomNumber,
+      rentMonth: rentRecord.rentMonth,
+      amountPaid: submission.amount,
+      paymentMethod: submission.paymentMethod,
+      transactionId: submission.transactionId,
+      receiptNumber,
+      remainingBalance: rentRecord.outstandingAmount,
+      isApprovalAction: true,
+    }).catch(err => {
+      console.error('[ApprovePayment Admin Email Error]:', err);
+    });
+  }
 
   return { submission, receipt, rentRecord };
 }
@@ -265,7 +375,7 @@ export async function recordCashPayment({
     notes: remarks || '',
   });
 
-  const resident = await ResidentProfile.findById(residentId);
+  const resident = await ResidentProfile.findById(residentId).populate('roomId').populate('bedId');
   if (resident) {
     await createInAppNotification({
       recipientId: resident.userId,
@@ -285,6 +395,59 @@ export async function recordCashPayment({
     newValues: { amount, receiptNumber },
   });
 
+  // Generate Receipt PDF & send confirmation to resident and admin
+  const property = await PGProperty.findById(rentRecord.propertyId);
+  const baseUrl = process.env.BASE_URL || 'https://pgappbackend.vercel.app';
+  const receiptDownloadUrl = `${baseUrl}/api/receipts/${receipt._id}/pdf`;
+
+  let pdfBuffer: Buffer | undefined;
+  try {
+    pdfBuffer = generateReceiptPDF({ receipt, property, resident });
+  } catch (pdfErr) {
+    console.error('[Receipt PDF Generation Error]:', pdfErr);
+  }
+
+  if (resident && resident.email) {
+    const roomNumber = (resident.roomId as any)?.roomNumber || 'Assigned';
+    sendTenantPaymentConfirmationEmail({
+      toEmail: resident.email,
+      tenantName: resident.fullName,
+      pgName: property?.name || 'HostTech PG',
+      roomNumber,
+      rentMonth: rentRecord.rentMonth,
+      amountPaid: amount,
+      paymentMethod: 'Cash',
+      transactionId: submission.transactionId,
+      receiptNumber,
+      remainingBalance: rentRecord.outstandingAmount,
+      receiptDownloadUrl,
+      pdfBuffer,
+    }).catch(err => {
+      console.error('[RecordCashPayment Tenant Email Error]:', err);
+    });
+  }
+
+  const adminContact = await getAdminEmailForProperty(rentRecord.propertyId, resident?.organizationId);
+  if (adminContact && resident) {
+    const roomNumber = (resident.roomId as any)?.roomNumber || 'Assigned';
+    sendAdminPaymentNotificationEmail({
+      toEmail: adminContact.email,
+      adminName: adminContact.name,
+      tenantName: resident.fullName,
+      tenantPhone: resident.phone,
+      pgName: property?.name || 'HostTech PG',
+      roomNumber,
+      rentMonth: rentRecord.rentMonth,
+      amountPaid: amount,
+      paymentMethod: 'Cash',
+      transactionId: submission.transactionId,
+      receiptNumber,
+      remainingBalance: rentRecord.outstandingAmount,
+      isApprovalAction: true,
+    }).catch(err => {
+      console.error('[RecordCashPayment Admin Email Error]:', err);
+    });
+  }
+
   return { submission, receipt, rentRecord };
 }
-

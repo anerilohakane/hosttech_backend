@@ -12,7 +12,8 @@ export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
     const propertyId = url.searchParams.get('propertyId') || undefined;
-    const rooms = await getRooms(propertyId);
+    const organizationId = auth.user.role !== 'vendor' ? auth.user.organizationId : undefined;
+    const rooms = await getRooms(propertyId, organizationId);
     return NextResponse.json({ success: true, rooms });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
@@ -20,13 +21,16 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = requireAuth(req, ['admin']);
+  const auth = requireAuth(req, ['admin', 'staff']);
   if ('error' in auth) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
   try {
     const body = await req.json();
+    if (auth.user.organizationId) {
+      body.organizationId = auth.user.organizationId;
+    }
     const room = await createRoom(body);
 
     await logAudit({
@@ -35,7 +39,7 @@ export async function POST(req: NextRequest) {
       recordId: room._id.toString(),
       adminId: auth.user.userId,
       adminName: auth.user.name,
-      newValues: { roomNumber: room.roomNumber, capacity: room.capacity },
+      newValues: { roomNumber: room.roomNumber, maxCapacity: room.maxCapacity },
     });
 
     return NextResponse.json({ success: true, room }, { status: 201 });
@@ -43,4 +47,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: err.message }, { status: 400 });
   }
 }
-

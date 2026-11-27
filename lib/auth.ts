@@ -12,11 +12,16 @@ function getJwtSecret(): string {
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
+export type UserRole = 'vendor' | 'admin' | 'staff' | 'resident';
+
 export interface TokenPayload {
   userId: string;
   email: string;
-  role: 'admin' | 'resident';
+  role: UserRole;
   name: string;
+  organizationId?: string; // Critical for tenant isolation
+  organizationStatus?: string;
+  permissions?: string[];
   residentId?: string;
   propertyId?: string;
 }
@@ -43,11 +48,23 @@ export async function comparePassword(password: string, hash: string): Promise<b
 
 export function extractAuthUser(req: NextRequest): TokenPayload | null {
   const authHeader = req.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ')) return null;
-  return verifyToken(authHeader.substring(7));
+  if (authHeader?.startsWith('Bearer ')) {
+    const verified = verifyToken(authHeader.substring(7));
+    if (verified) return verified;
+  }
+  // Also check query param ?token= for inline file/document links in new tabs
+  const url = new URL(req.url);
+  const queryToken = url.searchParams.get('token');
+  if (queryToken) {
+    return verifyToken(queryToken);
+  }
+  return null;
 }
 
-export function requireAuth(req: NextRequest, roles?: ('admin' | 'resident')[]): { user: TokenPayload } | { error: string; status: number } {
+export function requireAuth(
+  req: NextRequest,
+  roles?: UserRole[]
+): { user: TokenPayload } | { error: string; status: number } {
   const user = extractAuthUser(req);
   if (!user) {
     return { error: 'Authentication required. Please login.', status: 401 };
